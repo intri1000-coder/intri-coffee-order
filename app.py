@@ -171,6 +171,8 @@ def is_closed():
 def set_closed(closed):
     conn = get_db()
     if closed:
+        # 마감 시 주문 초기화
+        db_execute(conn, "DELETE FROM orders WHERE order_date = ?", (today_str(),))
         if DATABASE_URL:
             cur = conn.cursor()
             cur.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", ("closed_date", today_str()))
@@ -182,30 +184,8 @@ def set_closed(closed):
     conn.close()
 
 
-def auto_reset():
-    """23:59에 주문 초기화 + 마감 해제"""
-    import threading
-    def _run():
-        while True:
-            now = datetime.now()
-            # 다음 23:59까지 남은 초 계산
-            target = now.replace(hour=23, minute=59, second=0, microsecond=0)
-            if now >= target:
-                from datetime import timedelta
-                target += timedelta(days=1)
-            wait = (target - now).total_seconds()
-            threading.Event().wait(wait)
-            # 초기화
-            conn = get_db()
-            db_execute(conn, "DELETE FROM orders WHERE order_date = ?", (today_str(),))
-            db_execute(conn, "DELETE FROM settings WHERE key = ?", ("closed_date",))
-            conn.commit()
-            conn.close()
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
 
 
-auto_reset()
 
 
 # ── 주문 페이지 (직원용) ──
@@ -380,7 +360,7 @@ ORDER_PAGE = """
   </div>
 
   {% if closed %}
-  <div class="closed-banner">🚫 오늘 주문이 마감되었습니다</div>
+  <div class="closed-banner">☕ 내일 드실 음료를 미리 적어주세요</div>
   {% endif %}
 
   <div class="container">
