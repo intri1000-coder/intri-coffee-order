@@ -5,17 +5,56 @@
 """
 
 from flask import Flask, render_template_string, request, jsonify, redirect, url_for
-import sqlite3
 import os
 from datetime import datetime, date
 
 app = Flask(__name__)
-DB_PATH = os.path.join(os.path.dirname(__file__), "coffee_orders.db")
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
+# PostgreSQL(Render) 또는 SQLite(로컬) 자동 선택
+if DATABASE_URL:
+    import psycopg2
+    import psycopg2.extras
+    def get_db():
+        conn = psycopg2.connect(DATABASE_URL)
+        conn.autocommit = False
+        return conn
+    def db_execute(conn, sql, params=()):
+        # SQLite 호환 문법을 PostgreSQL로 변환
+        sql = sql.replace("INSERT OR REPLACE", "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value --")
+        sql = sql.replace("?", "%s")
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(sql, params)
+        return cur
+    def db_fetchone(conn, sql, params=()):
+        sql = sql.replace("?", "%s")
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(sql, params)
+        return cur.fetchone()
+    def db_fetchall(conn, sql, params=()):
+        sql = sql.replace("?", "%s")
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(sql, params)
+        return cur.fetchall()
+else:
+    import sqlite3
+    DB_PATH = os.path.join(os.path.dirname(__file__), "coffee_orders.db")
+    def get_db():
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        return conn
+    def db_execute(conn, sql, params=()):
+        return conn.execute(sql, params)
+    def db_fetchone(conn, sql, params=()):
+        return conn.execute(sql, params).fetchone()
+    def db_fetchall(conn, sql, params=()):
+        return conn.execute(sql, params).fetchall()
 
 # ── 바나프레소 메뉴 ──
 MENU = {
     "커피": [
         ("아메리카노", 2500),
+        ("디카페인 아메리카노", 2800),
         ("시그니처 아메리카노", 2700),
         ("바나리카노 (32oz)", 4000),
         ("클래식 밀크커피", 2500),
@@ -73,24 +112,45 @@ def get_db():
 
 def init_db():
     conn = get_db()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS orders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            order_date TEXT NOT NULL,
-            name TEXT NOT NULL,
-            menu TEXT NOT NULL,
-            temperature TEXT NOT NULL DEFAULT 'ICE',
-            price INTEGER NOT NULL,
-            created_at TEXT NOT NULL
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        )
-    """)
-    conn.commit()
+    if DATABASE_URL:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS orders (
+                id SERIAL PRIMARY KEY,
+                order_date TEXT NOT NULL,
+                name TEXT NOT NULL,
+                menu TEXT NOT NULL,
+                temperature TEXT NOT NULL DEFAULT 'ICE',
+                price INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
+        conn.commit()
+    else:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_date TEXT NOT NULL,
+                name TEXT NOT NULL,
+                menu TEXT NOT NULL,
+                temperature TEXT NOT NULL DEFAULT 'ICE',
+                price INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
+        conn.commit()
     conn.close()
 
 
@@ -103,7 +163,7 @@ def today_str():
 
 def is_closed():
     conn = get_db()
-    row = conn.execute("SELECT value FROM settings WHERE key = 'closed_date'").fetchone()
+    row = db_fetchone(conn, "SELECT value FROM settings WHERE key = %s" if DATABASE_URL else "SELECT value FROM settings WHERE key = ?", ("closed_date",))
     conn.close()
     return row is not None and row["value"] == today_str()
 
@@ -111,9 +171,13 @@ def is_closed():
 def set_closed(closed):
     conn = get_db()
     if closed:
-        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('closed_date', ?)", (today_str(),))
+        if DATABASE_URL:
+            cur = conn.cursor()
+            cur.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", ("closed_date", today_str()))
+        else:
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("closed_date", today_str()))
     else:
-        conn.execute("DELETE FROM settings WHERE key = 'closed_date'")
+        db_execute(conn, "DELETE FROM settings WHERE key = ?", ("closed_date",))
     conn.commit()
     conn.close()
 
@@ -133,8 +197,8 @@ def auto_reset():
             threading.Event().wait(wait)
             # 초기화
             conn = get_db()
-            conn.execute("DELETE FROM orders WHERE order_date = ?", (today_str(),))
-            conn.execute("DELETE FROM settings WHERE key = 'closed_date'")
+            db_execute(conn, "DELETE FROM orders WHERE order_date = ?", (today_str(),))
+            db_execute(conn, "DELETE FROM settings WHERE key = ?", ("closed_date",))
             conn.commit()
             conn.close()
     t = threading.Thread(target=_run, daemon=True)
@@ -634,10 +698,7 @@ ADMIN_PAGE = """
 @app.route("/")
 def index():
     conn = get_db()
-    rows = conn.execute(
-        "SELECT * FROM orders WHERE order_date = ? ORDER BY created_at",
-        (today_str(),),
-    ).fetchall()
+    rows = db_fetchall(conn, "SELECT * FROM orders WHERE order_date = ? ORDER BY created_at", (today_str(),))
     conn.close()
 
     return render_template_string(
@@ -652,7 +713,7 @@ def index():
 @app.route("/order", methods=["POST"])
 def place_order():
     if is_closed():
-        return jsonify({"ok": False, "error": "주문 마감 시간이 지났습니다"})
+        return jsonify({"ok": False, "error": "주문이 마감되었습니다"})
 
     data = request.get_json()
     name = data.get("name", "").strip()
@@ -664,22 +725,14 @@ def place_order():
         return jsonify({"ok": False, "error": "이름과 메뉴를 입력하세요"})
 
     conn = get_db()
-    # 같은 사람이 오늘 이미 주문했으면 업데이트
-    existing = conn.execute(
-        "SELECT id FROM orders WHERE order_date = ? AND name = ?",
-        (today_str(), name),
-    ).fetchone()
+    existing = db_fetchone(conn, "SELECT id FROM orders WHERE order_date = ? AND name = ?", (today_str(), name))
 
     if existing:
-        conn.execute(
-            "UPDATE orders SET menu = ?, temperature = ?, price = ?, created_at = ? WHERE id = ?",
-            (menu, temperature, price, datetime.now().isoformat(), existing["id"]),
-        )
+        db_execute(conn, "UPDATE orders SET menu = ?, temperature = ?, price = ?, created_at = ? WHERE id = ?",
+            (menu, temperature, price, datetime.now().isoformat(), existing["id"]))
     else:
-        conn.execute(
-            "INSERT INTO orders (order_date, name, menu, temperature, price, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (today_str(), name, menu, temperature, price, datetime.now().isoformat()),
-        )
+        db_execute(conn, "INSERT INTO orders (order_date, name, menu, temperature, price, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (today_str(), name, menu, temperature, price, datetime.now().isoformat()))
     conn.commit()
     conn.close()
     return jsonify({"ok": True})
@@ -688,10 +741,7 @@ def place_order():
 @app.route("/admin")
 def admin():
     conn = get_db()
-    orders = conn.execute(
-        "SELECT * FROM orders WHERE order_date = ? ORDER BY created_at",
-        (today_str(),),
-    ).fetchall()
+    orders = db_fetchall(conn, "SELECT * FROM orders WHERE order_date = ? ORDER BY created_at", (today_str(),))
 
     # 메뉴별 집계
     summary_dict = {}
@@ -739,7 +789,7 @@ def close_orders():
 @app.route("/admin/reset", methods=["POST"])
 def reset_today():
     conn = get_db()
-    conn.execute("DELETE FROM orders WHERE order_date = ?", (today_str(),))
+    db_execute(conn, "DELETE FROM orders WHERE order_date = ?", (today_str(),))
     conn.commit()
     conn.close()
     return jsonify({"ok": True})
@@ -747,12 +797,8 @@ def reset_today():
 
 @app.route("/api/summary")
 def api_summary():
-    """집계 API (외부 연동용)"""
     conn = get_db()
-    orders = conn.execute(
-        "SELECT * FROM orders WHERE order_date = ? ORDER BY created_at",
-        (today_str(),),
-    ).fetchall()
+    orders = db_fetchall(conn, "SELECT * FROM orders WHERE order_date = ? ORDER BY created_at", (today_str(),))
     conn.close()
     return jsonify({
         "date": today_str(),
