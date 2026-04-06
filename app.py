@@ -190,9 +190,10 @@ def set_closed(closed):
 
 
 def complete_orders():
-    """주문완료: 오늘 주문 초기화"""
+    """주문완료: 오늘 주문 초기화 + 마감 해제"""
     conn = get_db()
     db_execute(conn, "DELETE FROM orders WHERE order_date = ?", (today_str(),))
+    db_execute(conn, "DELETE FROM settings WHERE key = ?", ("closed_date",))
     conn.commit()
     conn.close()
 
@@ -641,7 +642,8 @@ ADMIN_PAGE = """
     {% endif %}
     <button class="copy-btn" onclick="copyToClipboard()">📋 카카오톡 전송용 텍스트 복사</button>
     {% if closed %}
-    <button onclick="completeOrders()" style="width:100%;padding:16px;background:#2196F3;color:white;border:none;border-radius:12px;font-size:16px;font-weight:bold;cursor:pointer;margin-top:8px;">✅ 주문완료 (오늘 주문 초기화 + 내일 주문 보기)</button>
+    <button onclick="completeOrders()" style="width:100%;padding:16px;background:#2196F3;color:white;border:none;border-radius:12px;font-size:16px;font-weight:bold;cursor:pointer;margin-top:8px;">✅ 주문완료 (오늘 주문 초기화 + 마감 해제)</button>
+    {% endif %}
 
     {% if tomorrow_orders %}
     <div class="card" style="margin-top:16px; border: 2px solid #2196F3;">
@@ -654,7 +656,8 @@ ADMIN_PAGE = """
       {% endfor %}
     </div>
     {% endif %}
-    {% endif %}
+
+    <button onclick="resetAll()" style="width:100%;padding:14px;background:#9E9E9E;color:white;border:none;border-radius:12px;font-size:15px;font-weight:bold;cursor:pointer;margin-top:24px;">🗑️ 전체 초기화</button>
   </div>
 
   <div class="toast" id="toast"></div>
@@ -696,6 +699,12 @@ ADMIN_PAGE = """
     function completeOrders() {
       if (!confirm('오늘 주문을 초기화하고 내일 주문 현황으로 전환할까요?')) return;
       fetch('/admin/complete', { method: 'POST' }).then(() => location.reload());
+    }
+
+    function resetAll() {
+      if (!confirm('⚠️ 오늘 주문 + 내일 사전주문 + 마감 상태를 모두 초기화할까요?')) return;
+      if (!confirm('정말 전체 초기화하시겠습니까? 되돌릴 수 없습니다.')) return;
+      fetch('/admin/reset', { method: 'POST' }).then(() => location.reload());
     }
   </script>
 </body>
@@ -752,8 +761,8 @@ def admin():
     closed = is_closed()
     # 마감 전: 오늘 주문 / 마감 후: 오늘 주문 (주문완료 전까지)
     orders = db_fetchall(conn, "SELECT * FROM orders WHERE order_date = ? ORDER BY created_at", (today_str(),))
-    # 내일 주문 (마감 후 사전주문)
-    tomorrow_orders = db_fetchall(conn, "SELECT * FROM orders WHERE order_date = ? ORDER BY created_at", (tomorrow_str(),)) if closed else []
+    # 내일 주문 (사전주문 — 마감 여부와 관계없이 항상 표시)
+    tomorrow_orders = db_fetchall(conn, "SELECT * FROM orders WHERE order_date = ? ORDER BY created_at", (tomorrow_str(),))
 
     # 메뉴별 집계
     summary_dict = {}
@@ -803,6 +812,17 @@ def close_orders():
 def complete():
     """주문완료: 오늘 주문 초기화"""
     complete_orders()
+    return jsonify({"ok": True})
+
+
+@app.route("/admin/reset", methods=["POST"])
+def reset_all():
+    """전체 초기화: 오늘 + 내일 주문 삭제 + 마감 해제"""
+    conn = get_db()
+    db_execute(conn, "DELETE FROM orders WHERE order_date IN (?, ?)", (today_str(), tomorrow_str()))
+    db_execute(conn, "DELETE FROM settings WHERE key = ?", ("closed_date",))
+    conn.commit()
+    conn.close()
     return jsonify({"ok": True})
 
 
