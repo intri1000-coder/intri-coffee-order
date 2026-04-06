@@ -6,48 +6,57 @@
 
 from flask import Flask, render_template_string, request, jsonify, redirect, url_for
 import os
+import sqlite3
 from datetime import datetime, date
 
 app = Flask(__name__)
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
-# PostgreSQL(Render) 또는 SQLite(로컬) 자동 선택
 if DATABASE_URL:
     import psycopg2
     import psycopg2.extras
-    def get_db():
+
+DB_PATH = os.path.join(os.path.dirname(__file__), "coffee_orders.db")
+
+
+def get_db():
+    if DATABASE_URL:
         conn = psycopg2.connect(DATABASE_URL)
         conn.autocommit = False
         return conn
-    def db_execute(conn, sql, params=()):
-        # SQLite 호환 문법을 PostgreSQL로 변환
-        sql = sql.replace("INSERT OR REPLACE", "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value --")
+    else:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+
+def db_execute(conn, sql, params=()):
+    if DATABASE_URL:
         sql = sql.replace("?", "%s")
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(sql, params)
         return cur
-    def db_fetchone(conn, sql, params=()):
+    else:
+        return conn.execute(sql, params)
+
+
+def db_fetchone(conn, sql, params=()):
+    if DATABASE_URL:
         sql = sql.replace("?", "%s")
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(sql, params)
         return cur.fetchone()
-    def db_fetchall(conn, sql, params=()):
+    else:
+        return conn.execute(sql, params).fetchone()
+
+
+def db_fetchall(conn, sql, params=()):
+    if DATABASE_URL:
         sql = sql.replace("?", "%s")
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(sql, params)
         return cur.fetchall()
-else:
-    import sqlite3
-    DB_PATH = os.path.join(os.path.dirname(__file__), "coffee_orders.db")
-    def get_db():
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        return conn
-    def db_execute(conn, sql, params=()):
-        return conn.execute(sql, params)
-    def db_fetchone(conn, sql, params=()):
-        return conn.execute(sql, params).fetchone()
-    def db_fetchall(conn, sql, params=()):
+    else:
         return conn.execute(sql, params).fetchall()
 
 # ── 바나프레소 메뉴 ──
