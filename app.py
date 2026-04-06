@@ -383,6 +383,7 @@ ORDER_PAGE = """
       <div class="form-group">
         <label>👤 이름</label>
         <input type="text" id="nameInput" placeholder="이름을 입력하세요" required>
+        <p style="font-size:12px; color:#999; margin-top:6px;">같은 이름으로 다시 주문하면 변경됩니다</p>
       </div>
 
       <div class="form-group">
