@@ -6,7 +6,9 @@
 
 from flask import Flask, render_template_string, request, jsonify, redirect, url_for
 import os
-from datetime import datetime, date
+from datetime import datetime, timedelta, timezone
+
+KST = timezone(timedelta(hours=9))
 
 app = Flask(__name__)
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -154,12 +156,11 @@ init_db()
 
 
 def today_str():
-    return date.today().isoformat()
+    return datetime.now(KST).date().isoformat()
 
 
 def tomorrow_str():
-    from datetime import timedelta
-    return (date.today() + timedelta(days=1)).isoformat()
+    return (datetime.now(KST).date() + timedelta(days=1)).isoformat()
 
 
 def is_closed():
