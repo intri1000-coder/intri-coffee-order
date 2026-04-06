@@ -12,21 +12,28 @@ app = Flask(__name__)
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 if DATABASE_URL:
-    import psycopg
-    from psycopg.rows import dict_row
+    import psycopg2
+    import psycopg2.extras
     print("[DB] PostgreSQL 모드")
 
     def get_db():
-        return psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=False)
+        conn = psycopg2.connect(DATABASE_URL)
+        return conn
 
     def db_execute(conn, sql, params=()):
-        return conn.execute(sql.replace("?", "%s"), params)
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(sql.replace("?", "%s"), params)
+        return cur
 
     def db_fetchone(conn, sql, params=()):
-        return conn.execute(sql.replace("?", "%s"), params).fetchone()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(sql.replace("?", "%s"), params)
+        return cur.fetchone()
 
     def db_fetchall(conn, sql, params=()):
-        return conn.execute(sql.replace("?", "%s"), params).fetchall()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(sql.replace("?", "%s"), params)
+        return cur.fetchall()
 else:
     import sqlite3
     print("[DB] SQLite 모드")
@@ -99,17 +106,11 @@ CUTOFF_HOUR = 8   # 표시용 (참고 시간)
 CUTOFF_MINUTE = 20
 
 
-# ── DB ──
-def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
 def init_db():
     conn = get_db()
     if DATABASE_URL:
-        conn.execute("""
+        cur = conn.cursor()
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS orders (
                 id SERIAL PRIMARY KEY,
                 order_date TEXT NOT NULL,
@@ -120,7 +121,7 @@ def init_db():
                 created_at TEXT NOT NULL
             )
         """)
-        conn.execute("""
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -179,9 +180,9 @@ def set_closed(closed):
     conn = get_db()
     if closed:
         if DATABASE_URL:
-            conn.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", ("closed_date", today_str()))
+            db_execute(conn, "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", ("closed_date", today_str()))
         else:
-            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("closed_date", today_str()))
+            db_execute(conn, "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("closed_date", today_str()))
     else:
         db_execute(conn, "DELETE FROM settings WHERE key = ?", ("closed_date",))
     conn.commit()
