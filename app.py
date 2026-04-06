@@ -176,18 +176,28 @@ def today_str():
     return date.today().isoformat()
 
 
+def tomorrow_str():
+    from datetime import timedelta
+    return (date.today() + timedelta(days=1)).isoformat()
+
+
 def is_closed():
+    """오늘 마감되었는지 확인"""
     conn = get_db()
-    row = db_fetchone(conn, "SELECT value FROM settings WHERE key = %s" if DATABASE_URL else "SELECT value FROM settings WHERE key = ?", ("closed_date",))
+    row = db_fetchone(conn, "SELECT value FROM settings WHERE key = ?", ("closed_date",))
     conn.close()
     return row is not None and row["value"] == today_str()
 
 
+def active_order_date():
+    """주문이 저장될 날짜: 마감 전이면 오늘, 마감 후면 내일"""
+    return tomorrow_str() if is_closed() else today_str()
+
+
 def set_closed(closed):
+    """마감 설정 (주문 데이터 건드리지 않음)"""
     conn = get_db()
     if closed:
-        # 마감 시 주문 초기화
-        db_execute(conn, "DELETE FROM orders WHERE order_date = ?", (today_str(),))
         if DATABASE_URL:
             cur = conn.cursor()
             cur.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", ("closed_date", today_str()))
@@ -195,6 +205,14 @@ def set_closed(closed):
             conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("closed_date", today_str()))
     else:
         db_execute(conn, "DELETE FROM settings WHERE key = ?", ("closed_date",))
+    conn.commit()
+    conn.close()
+
+
+def complete_orders():
+    """주문완료: 오늘 주문 초기화"""
+    conn = get_db()
+    db_execute(conn, "DELETE FROM orders WHERE order_date = ?", (today_str(),))
     conn.commit()
     conn.close()
 
@@ -371,15 +389,16 @@ ORDER_PAGE = """
 <body>
   <div class="header">
     <h1>☕ 인트리홀딩스 모닝커피타임</h1>
-    <p>{{ today }}{% if closed %} | 주문 마감됨{% endif %}</p>
+    <p>{{ today }}</p>
   </div>
 
   {% if closed %}
-  <div class="closed-banner">☕ 내일 드실 음료를 미리 적어주세요</div>
+  <div class="closed-banner">오늘 주문은 마감되었습니다. 내일 마실 음료를 미리 골라보세요</div>
+  {% else %}
+  <div class="closed-banner" style="background:#4CAF50;">오늘 마실 음료를 고르세요</div>
   {% endif %}
 
   <div class="container">
-    {% if not closed %}
     <form id="orderForm">
       <div class="form-group">
         <label>👤 이름</label>
@@ -402,7 +421,6 @@ ORDER_PAGE = """
           {% for name, price in items %}
           <div class="menu-item" data-menu="{{ name }}" data-price="{{ price }}" onclick="selectMenu(this)">
             <div class="name">{{ name }}</div>
-            <!-- <div class="price">{{ "{:,}".format(price) }}원</div> -->
           </div>
           {% endfor %}
         </div>
@@ -412,12 +430,13 @@ ORDER_PAGE = """
       <div class="bottom-spacer"></div>
     </form>
     <div class="submit-bar">
-      <button type="submit" form="orderForm" class="submit-btn" id="submitBtn" disabled>주문하기</button>
+      <button type="submit" form="orderForm" class="submit-btn" id="submitBtn" disabled>
+        {% if closed %}내일 마실 음료 주문{% else %}음료 주문{% endif %}
+      </button>
     </div>
-    {% endif %}
 
     <div class="today-orders">
-      <h3>📋 오늘 주문 현황 ({{ orders|length }}건)</h3>
+      <h3>📋 {% if closed %}내일{% else %}오늘{% endif %} 주문 현황 ({{ orders|length }}건)</h3>
       <ul class="order-list">
         {% for o in orders %}
         <li>
@@ -635,12 +654,26 @@ ADMIN_PAGE = """
     </div>
 
     {% if not closed %}
-    <button class="close-btn" onclick="toggleClose(true)" style="width:100%;padding:16px;background:#FF9800;color:white;border:none;border-radius:12px;font-size:16px;font-weight:bold;cursor:pointer;margin-bottom:8px;">🔒 주문 마감하기</button>
+    <button onclick="toggleClose(true)" style="width:100%;padding:16px;background:#FF9800;color:white;border:none;border-radius:12px;font-size:16px;font-weight:bold;cursor:pointer;margin-bottom:8px;">🔒 주문 마감하기</button>
     {% else %}
-    <button class="close-btn" onclick="toggleClose(false)" style="width:100%;padding:16px;background:#4CAF50;color:white;border:none;border-radius:12px;font-size:16px;font-weight:bold;cursor:pointer;margin-bottom:8px;">🔓 주문 마감 해제</button>
+    <button onclick="toggleClose(false)" style="width:100%;padding:16px;background:#4CAF50;color:white;border:none;border-radius:12px;font-size:16px;font-weight:bold;cursor:pointer;margin-bottom:8px;">🔓 주문 마감 해제</button>
     {% endif %}
     <button class="copy-btn" onclick="copyToClipboard()">📋 카카오톡 전송용 텍스트 복사</button>
-    <button class="reset-btn" onclick="resetOrders()">🗑️ 오늘 주문 초기화</button>
+    {% if closed %}
+    <button onclick="completeOrders()" style="width:100%;padding:16px;background:#2196F3;color:white;border:none;border-radius:12px;font-size:16px;font-weight:bold;cursor:pointer;margin-top:8px;">✅ 주문완료 (오늘 주문 초기화 + 내일 주문 보기)</button>
+
+    {% if tomorrow_orders %}
+    <div class="card" style="margin-top:16px; border: 2px solid #2196F3;">
+      <h2>📅 내일 사전주문 ({{ tomorrow_orders|length }}건)</h2>
+      {% for o in tomorrow_orders %}
+      <div class="order-detail">
+        <span>{{ o.name }}</span>
+        <span>{{ o.menu }} ({{ o.temperature }})</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% endif %}
   </div>
 
   <div class="toast" id="toast"></div>
@@ -679,9 +712,9 @@ ADMIN_PAGE = """
       }).then(() => location.reload());
     }
 
-    function resetOrders() {
-      if (!confirm('오늘 주문을 모두 초기화할까요?')) return;
-      fetch('/admin/reset', { method: 'POST' }).then(() => location.reload());
+    function completeOrders() {
+      if (!confirm('오늘 주문을 초기화하고 내일 주문 현황으로 전환할까요?')) return;
+      fetch('/admin/complete', { method: 'POST' }).then(() => location.reload());
     }
   </script>
 </body>
@@ -693,7 +726,8 @@ ADMIN_PAGE = """
 @app.route("/")
 def index():
     conn = get_db()
-    rows = db_fetchall(conn, "SELECT * FROM orders WHERE order_date = ? ORDER BY created_at", (today_str(),))
+    order_date = active_order_date()
+    rows = db_fetchall(conn, "SELECT * FROM orders WHERE order_date = ? ORDER BY created_at", (order_date,))
     conn.close()
 
     return render_template_string(
@@ -707,27 +741,25 @@ def index():
 
 @app.route("/order", methods=["POST"])
 def place_order():
-    if is_closed():
-        return jsonify({"ok": False, "error": "주문이 마감되었습니다"})
-
     data = request.get_json()
     name = data.get("name", "").strip()
     menu = data.get("menu", "").strip()
     temperature = data.get("temperature", "ICE")
     price = data.get("price", 0)
+    order_date = active_order_date()
 
     if not name or not menu:
         return jsonify({"ok": False, "error": "이름과 메뉴를 입력하세요"})
 
     conn = get_db()
-    existing = db_fetchone(conn, "SELECT id FROM orders WHERE order_date = ? AND name = ?", (today_str(), name))
+    existing = db_fetchone(conn, "SELECT id FROM orders WHERE order_date = ? AND name = ?", (order_date, name))
 
     if existing:
         db_execute(conn, "UPDATE orders SET menu = ?, temperature = ?, price = ?, created_at = ? WHERE id = ?",
             (menu, temperature, price, datetime.now().isoformat(), existing["id"]))
     else:
         db_execute(conn, "INSERT INTO orders (order_date, name, menu, temperature, price, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (today_str(), name, menu, temperature, price, datetime.now().isoformat()))
+            (order_date, name, menu, temperature, price, datetime.now().isoformat()))
     conn.commit()
     conn.close()
     return jsonify({"ok": True})
@@ -736,7 +768,11 @@ def place_order():
 @app.route("/admin")
 def admin():
     conn = get_db()
+    closed = is_closed()
+    # 마감 전: 오늘 주문 / 마감 후: 오늘 주문 (주문완료 전까지)
     orders = db_fetchall(conn, "SELECT * FROM orders WHERE order_date = ? ORDER BY created_at", (today_str(),))
+    # 내일 주문 (마감 후 사전주문)
+    tomorrow_orders = db_fetchall(conn, "SELECT * FROM orders WHERE order_date = ? ORDER BY created_at", (tomorrow_str(),)) if closed else []
 
     # 메뉴별 집계
     summary_dict = {}
@@ -766,11 +802,12 @@ def admin():
     return render_template_string(
         ADMIN_PAGE,
         orders=orders,
+        tomorrow_orders=tomorrow_orders,
         summary=summary,
         total_price=total_price,
         today=today_str(),
         copy_text=copy_text,
-        closed=is_closed(),
+        closed=closed,
     )
 
 
@@ -781,12 +818,10 @@ def close_orders():
     return jsonify({"ok": True})
 
 
-@app.route("/admin/reset", methods=["POST"])
-def reset_today():
-    conn = get_db()
-    db_execute(conn, "DELETE FROM orders WHERE order_date = ?", (today_str(),))
-    conn.commit()
-    conn.close()
+@app.route("/admin/complete", methods=["POST"])
+def complete():
+    """주문완료: 오늘 주문 초기화"""
+    complete_orders()
     return jsonify({"ok": True})
 
 
