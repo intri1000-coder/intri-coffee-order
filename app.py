@@ -6,55 +6,45 @@
 
 from flask import Flask, render_template_string, request, jsonify, redirect, url_for
 import os
-import sqlite3
 from datetime import datetime, date
 
 app = Flask(__name__)
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
-# PostgreSQL 사용 여부 확인
-USE_PG = False
 if DATABASE_URL:
-    try:
-        import psycopg
-        from psycopg.rows import dict_row
-        test_conn = psycopg.connect(DATABASE_URL)
-        test_conn.close()
-        USE_PG = True
-        print("[DB] PostgreSQL 연결 성공")
-    except Exception as e:
-        print(f"[DB] PostgreSQL 연결 실패: {e}, SQLite 사용")
-        USE_PG = False
+    import psycopg
+    from psycopg.rows import dict_row
+    print("[DB] PostgreSQL 모드")
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "coffee_orders.db")
+    def get_db():
+        return psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=False)
 
+    def db_execute(conn, sql, params=()):
+        return conn.execute(sql.replace("?", "%s"), params)
 
-def get_db():
-    if USE_PG:
-        conn = psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=False)
-        return conn
-    else:
+    def db_fetchone(conn, sql, params=()):
+        return conn.execute(sql.replace("?", "%s"), params).fetchone()
+
+    def db_fetchall(conn, sql, params=()):
+        return conn.execute(sql.replace("?", "%s"), params).fetchall()
+else:
+    import sqlite3
+    print("[DB] SQLite 모드")
+    DB_PATH = os.path.join(os.path.dirname(__file__), "coffee_orders.db")
+
+    def get_db():
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         return conn
 
+    def db_execute(conn, sql, params=()):
+        return conn.execute(sql, params)
 
-def db_execute(conn, sql, params=()):
-    if USE_PG:
-        sql = sql.replace("?", "%s")
-    return conn.execute(sql, params)
+    def db_fetchone(conn, sql, params=()):
+        return conn.execute(sql, params).fetchone()
 
-
-def db_fetchone(conn, sql, params=()):
-    if USE_PG:
-        sql = sql.replace("?", "%s")
-    return conn.execute(sql, params).fetchone()
-
-
-def db_fetchall(conn, sql, params=()):
-    if USE_PG:
-        sql = sql.replace("?", "%s")
-    return conn.execute(sql, params).fetchall()
+    def db_fetchall(conn, sql, params=()):
+        return conn.execute(sql, params).fetchall()
 
 # ── 바나프레소 메뉴 ──
 MENU = {
@@ -118,7 +108,7 @@ def get_db():
 
 def init_db():
     conn = get_db()
-    if USE_PG:
+    if DATABASE_URL:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS orders (
                 id SERIAL PRIMARY KEY,
@@ -188,7 +178,7 @@ def set_closed(closed):
     """마감 설정 (주문 데이터 건드리지 않음)"""
     conn = get_db()
     if closed:
-        if USE_PG:
+        if DATABASE_URL:
             conn.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", ("closed_date", today_str()))
         else:
             conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("closed_date", today_str()))
