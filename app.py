@@ -419,7 +419,7 @@ ORDER_PAGE = """
     </div>
 
     <div class="today-orders">
-      <h3>📋 {% if closed %}내일{% else %}오늘{% endif %} 주문 현황 ({{ orders|length }}건)</h3>
+      <h3>📋 {% if closed %}내일({{ tomorrow_short }}) 주문 현황{% else %}오늘 주문 현황{% endif %} ({{ orders|length }}건)</h3>
       <ul class="order-list">
         {% for o in orders %}
         <li>
@@ -721,12 +721,16 @@ def index():
     rows = db_fetchall(conn, "SELECT * FROM orders WHERE order_date = ? ORDER BY created_at", (order_date,))
     conn.close()
 
+    tomorrow = datetime.now(KST).date() + timedelta(days=1)
+    tomorrow_short = f"{tomorrow.month}/{tomorrow.day}"
+
     return render_template_string(
         ORDER_PAGE,
         menu=MENU,
         orders=rows,
         today=today_str(),
         closed=is_closed(),
+        tomorrow_short=tomorrow_short,
     )
 
 
