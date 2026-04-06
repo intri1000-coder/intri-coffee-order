@@ -12,15 +12,12 @@ from datetime import datetime, date
 app = Flask(__name__)
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
-if DATABASE_URL:
-    import psycopg2
-    import psycopg2.extras
-
 DB_PATH = os.path.join(os.path.dirname(__file__), "coffee_orders.db")
 
 
 def get_db():
     if DATABASE_URL:
+        import psycopg2
         conn = psycopg2.connect(DATABASE_URL)
         conn.autocommit = False
         return conn
@@ -30,32 +27,41 @@ def get_db():
         return conn
 
 
+def _pg_execute(conn, sql, params=()):
+    sql = sql.replace("?", "%s")
+    cur = conn.cursor()
+    cur.execute(sql, params)
+    return cur
+
+
+def _pg_to_dict(cursor):
+    if cursor.description is None:
+        return []
+    cols = [d[0] for d in cursor.description]
+    return [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+
 def db_execute(conn, sql, params=()):
     if DATABASE_URL:
-        sql = sql.replace("?", "%s")
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(sql, params)
-        return cur
+        return _pg_execute(conn, sql, params)
     else:
         return conn.execute(sql, params)
 
 
 def db_fetchone(conn, sql, params=()):
     if DATABASE_URL:
-        sql = sql.replace("?", "%s")
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(sql, params)
-        return cur.fetchone()
+        cur = _pg_execute(conn, sql, params)
+        cols = [d[0] for d in cur.description]
+        row = cur.fetchone()
+        return dict(zip(cols, row)) if row else None
     else:
         return conn.execute(sql, params).fetchone()
 
 
 def db_fetchall(conn, sql, params=()):
     if DATABASE_URL:
-        sql = sql.replace("?", "%s")
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(sql, params)
-        return cur.fetchall()
+        cur = _pg_execute(conn, sql, params)
+        return _pg_to_dict(cur)
     else:
         return conn.execute(sql, params).fetchall()
 
