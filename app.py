@@ -12,12 +12,25 @@ from datetime import datetime, date
 app = Flask(__name__)
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
+# PostgreSQL 사용 여부 확인
+USE_PG = False
+if DATABASE_URL:
+    try:
+        import psycopg2
+        # 연결 테스트
+        test_conn = psycopg2.connect(DATABASE_URL)
+        test_conn.close()
+        USE_PG = True
+        print(f"[DB] PostgreSQL 연결 성공")
+    except Exception as e:
+        print(f"[DB] PostgreSQL 연결 실패: {e}, SQLite 사용")
+        USE_PG = False
+
 DB_PATH = os.path.join(os.path.dirname(__file__), "coffee_orders.db")
 
 
 def get_db():
-    if DATABASE_URL:
-        import psycopg2
+    if USE_PG:
         conn = psycopg2.connect(DATABASE_URL)
         conn.autocommit = False
         return conn
@@ -27,30 +40,21 @@ def get_db():
         return conn
 
 
-def _pg_execute(conn, sql, params=()):
-    sql = sql.replace("?", "%s")
-    cur = conn.cursor()
-    cur.execute(sql, params)
-    return cur
-
-
-def _pg_to_dict(cursor):
-    if cursor.description is None:
-        return []
-    cols = [d[0] for d in cursor.description]
-    return [dict(zip(cols, row)) for row in cursor.fetchall()]
-
-
 def db_execute(conn, sql, params=()):
-    if DATABASE_URL:
-        return _pg_execute(conn, sql, params)
+    if USE_PG:
+        sql = sql.replace("?", "%s")
+        cur = conn.cursor()
+        cur.execute(sql, params)
+        return cur
     else:
         return conn.execute(sql, params)
 
 
 def db_fetchone(conn, sql, params=()):
-    if DATABASE_URL:
-        cur = _pg_execute(conn, sql, params)
+    if USE_PG:
+        sql = sql.replace("?", "%s")
+        cur = conn.cursor()
+        cur.execute(sql, params)
         cols = [d[0] for d in cur.description]
         row = cur.fetchone()
         return dict(zip(cols, row)) if row else None
@@ -59,9 +63,12 @@ def db_fetchone(conn, sql, params=()):
 
 
 def db_fetchall(conn, sql, params=()):
-    if DATABASE_URL:
-        cur = _pg_execute(conn, sql, params)
-        return _pg_to_dict(cur)
+    if USE_PG:
+        sql = sql.replace("?", "%s")
+        cur = conn.cursor()
+        cur.execute(sql, params)
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
     else:
         return conn.execute(sql, params).fetchall()
 
@@ -127,7 +134,7 @@ def get_db():
 
 def init_db():
     conn = get_db()
-    if DATABASE_URL:
+    if USE_PG:
         cur = conn.cursor()
         cur.execute("""
             CREATE TABLE IF NOT EXISTS orders (
@@ -198,7 +205,7 @@ def set_closed(closed):
     """마감 설정 (주문 데이터 건드리지 않음)"""
     conn = get_db()
     if closed:
-        if DATABASE_URL:
+        if USE_PG:
             cur = conn.cursor()
             cur.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", ("closed_date", today_str()))
         else:
