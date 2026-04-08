@@ -191,10 +191,9 @@ def set_closed(closed):
 
 
 def complete_orders():
-    """주문완료: 오늘 주문 초기화 + 마감 해제"""
+    """주문완료: 오늘 주문 초기화 (마감 상태는 유지)"""
     conn = get_db()
     db_execute(conn, "DELETE FROM orders WHERE order_date = ?", (today_str(),))
-    db_execute(conn, "DELETE FROM settings WHERE key = ?", ("closed_date",))
     conn.commit()
     conn.close()
 
@@ -643,7 +642,7 @@ ADMIN_PAGE = """
     {% endif %}
     <button class="copy-btn" onclick="copyToClipboard()">📋 카카오톡 전송용 텍스트 복사</button>
     {% if closed %}
-    <button onclick="completeOrders()" style="width:100%;padding:16px;background:#2196F3;color:white;border:none;border-radius:12px;font-size:16px;font-weight:bold;cursor:pointer;margin-top:8px;">✅ 주문완료 (오늘 주문 초기화 + 마감 해제)</button>
+    <button onclick="completeOrders()" style="width:100%;padding:16px;background:#2196F3;color:white;border:none;border-radius:12px;font-size:16px;font-weight:bold;cursor:pointer;margin-top:8px;">✅ 주문완료 (오늘 주문 초기화)</button>
     {% endif %}
 
     {% if tomorrow_orders %}
