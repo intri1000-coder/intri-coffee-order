@@ -155,6 +155,18 @@ def init_db():
 init_db()
 
 
+def cleanup_old_orders():
+    """7일 이전 주문 데이터 삭제"""
+    cutoff = (datetime.now(KST).date() - timedelta(days=7)).isoformat()
+    conn = get_db()
+    db_execute(conn, "DELETE FROM orders WHERE order_date < ?", (cutoff,))
+    conn.commit()
+    conn.close()
+
+
+cleanup_old_orders()
+
+
 def today_str():
     return datetime.now(KST).date().isoformat()
 
@@ -191,11 +203,22 @@ def set_closed(closed):
 
 
 def complete_orders():
-    """주문완료: 오늘 주문 초기화 (마감 상태는 유지)"""
+    """주문완료: 완료 플래그 설정 (주문 데이터는 유지)"""
     conn = get_db()
-    db_execute(conn, "DELETE FROM orders WHERE order_date = ?", (today_str(),))
+    if DATABASE_URL:
+        db_execute(conn, "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", ("completed_date", today_str()))
+    else:
+        db_execute(conn, "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("completed_date", today_str()))
     conn.commit()
     conn.close()
+
+
+def is_completed():
+    """오늘 주문완료되었는지 확인"""
+    conn = get_db()
+    row = db_fetchone(conn, "SELECT value FROM settings WHERE key = ?", ("completed_date",))
+    conn.close()
+    return row is not None and row["value"] == today_str()
 
 
 
@@ -641,8 +664,19 @@ ADMIN_PAGE = """
     <button onclick="toggleClose(false)" style="width:100%;padding:16px;background:#4CAF50;color:white;border:none;border-radius:12px;font-size:16px;font-weight:bold;cursor:pointer;margin-bottom:8px;">🔓 주문 마감 해제</button>
     {% endif %}
     <button class="copy-btn" onclick="copyToClipboard()">📋 카카오톡 전송용 텍스트 복사</button>
-    {% if closed %}
-    <button onclick="completeOrders()" style="width:100%;padding:16px;background:#2196F3;color:white;border:none;border-radius:12px;font-size:16px;font-weight:bold;cursor:pointer;margin-top:8px;">✅ 주문완료 (오늘 주문 초기화)</button>
+    {% if closed and not completed %}
+    <button onclick="completeOrders()" style="width:100%;padding:16px;background:#2196F3;color:white;border:none;border-radius:12px;font-size:16px;font-weight:bold;cursor:pointer;margin-top:8px;">✅ 주문완료</button>
+    {% endif %}
+    {% if completed %}
+    <div class="card" style="margin-top:16px; border: 2px solid #4CAF50;">
+      <h2>✅ 오늘 주문 완료 ({{ orders|length }}건)</h2>
+      {% for o in orders %}
+      <div class="order-detail">
+        <span>{{ o.name }}</span>
+        <span>{{ o.menu }} ({{ o.temperature }}) — {{ "{:,}".format(o.price) }}원</span>
+      </div>
+      {% endfor %}
+    </div>
     {% endif %}
 
     {% if tomorrow_orders %}
@@ -802,6 +836,7 @@ def admin():
         today=today_str(),
         copy_text=copy_text,
         closed=closed,
+        completed=is_completed(),
     )
 
 
@@ -824,7 +859,7 @@ def reset_all():
     """전체 초기화: 오늘 + 내일 주문 삭제 + 마감 해제"""
     conn = get_db()
     db_execute(conn, "DELETE FROM orders WHERE order_date IN (?, ?)", (today_str(), tomorrow_str()))
-    db_execute(conn, "DELETE FROM settings WHERE key = ?", ("closed_date",))
+    db_execute(conn, "DELETE FROM settings WHERE key IN (?, ?)", ("closed_date", "completed_date"))
     conn.commit()
     conn.close()
     return jsonify({"ok": True})
